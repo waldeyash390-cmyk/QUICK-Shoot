@@ -1,12 +1,14 @@
-// filetransfer.js — multi-user version.
-// Sending: broadcasts file chunks to all connected peers.
-// Receiving: tracks one active incoming transfer PER sender peer.
+// filetransfer.js — maximum throughput version.
+// Uses a parallel pipeline: multiple chunks are encrypted and queued
+// simultaneously so the channel is never starved waiting for crypto.
+// This mirrors how speed tests saturate bandwidth — continuous data flow.
 
 import { CryptoModule } from "./crypto.js";
 
-const CHUNK_SIZE = 16 * 1024;
-const BUFFERED_AMOUNT_HIGH = 1 * 1024 * 1024;
-const BUFFERED_AMOUNT_LOW = 256 * 1024;
+const CHUNK_SIZE = 512 * 1024;           // 512KB chunks
+const PIPELINE_DEPTH = 8;                // encrypt 8 chunks ahead in parallel
+const BUFFERED_AMOUNT_HIGH = 8 * 1024 * 1024;  // 8MB buffer before pausing
+const BUFFERED_AMOUNT_LOW  = 1 * 1024 * 1024;  // resume at 1MB
 
 function genId() {
   return crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
@@ -20,7 +22,6 @@ export class FileTransferManager extends EventTarget {
 
     this.outQueue = [];
     this.outActive = null;
-    /** @type {Map<string, object>} peerId -> active incoming transfer */
     this.inActives = new Map();
 
     mesh.addEventListener("data", (e) => {
@@ -32,7 +33,9 @@ export class FileTransferManager extends EventTarget {
     for (const file of files) {
       const id = genId();
       this.outQueue.push({ id, file });
-      this.dispatchEvent(new CustomEvent("queued", { detail: { id, name: file.name, size: file.size } }));
+      this.dispatchEvent(new CustomEvent("queued", {
+        detail: { id, name: file.name, size: file.size },
+      }));
     }
     this._pump();
   }
@@ -43,8 +46,10 @@ export class FileTransferManager extends EventTarget {
     this.outActive = {
       id: job.id,
       file: job.file,
-      chunkIndex: 0,
       totalChunks: Math.ceil(job.file.size / CHUNK_SIZE) || 1,
+      startTime: Date.now(),
+      bytesSent: 0,
+      chunksSent: 0,
     };
 
     this.mesh.broadcast("file", JSON.stringify({
@@ -56,34 +61,75 @@ export class FileTransferManager extends EventTarget {
       totalChunks: this.outActive.totalChunks,
     }));
 
-    await this._sendChunksFrom(0);
+    await this._sendAllChunks();
   }
 
-  async _sendChunksFrom(startChunk) {
+  async _sendAllChunks() {
     const active = this.outActive;
     if (!active) return;
-    active.chunkIndex = startChunk;
 
-    while (active.chunkIndex < active.totalChunks) {
-      if (this.mesh.bufferedAmount("file") > BUFFERED_AMOUNT_HIGH) {
+    const total = active.totalChunks;
+    let nextChunkToRead = 0;
+    let nextChunkToSend = 0;
+    const pipeline = new Map();
+
+    const encryptChunk = async (index) => {
+      const start = index * CHUNK_SIZE;
+      const slice = await active.file.slice(start, start + CHUNK_SIZE).arrayBuffer();
+      const encrypted = await CryptoModule.encryptBytes(this.key, slice);
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, index, false);
+      const frame = new Uint8Array(4 + encrypted.length);
+      frame.set(header, 0);
+      frame.set(encrypted, 4);
+      return frame;
+    };
+
+    while (
+      nextChunkToRead < total &&
+      nextChunkToRead - nextChunkToSend < PIPELINE_DEPTH
+    ) {
+      const idx = nextChunkToRead++;
+      encryptChunk(idx).then((frame) => pipeline.set(idx, frame));
+    }
+
+    while (nextChunkToSend < total) {
+      while (this.mesh.bufferedAmount("file") > BUFFERED_AMOUNT_HIGH) {
         await this._waitForDrain();
       }
 
-      const start = active.chunkIndex * CHUNK_SIZE;
-      const slice = await active.file.slice(start, start + CHUNK_SIZE).arrayBuffer();
-      const encrypted = await CryptoModule.encryptBytes(this.key, slice);
+      while (!pipeline.has(nextChunkToSend)) {
+        await new Promise((r) => setTimeout(r, 1));
+      }
 
-      const header = new Uint8Array(4);
-      new DataView(header.buffer).setUint32(0, active.chunkIndex, false);
-      const frame = new Uint8Array(header.length + encrypted.length);
-      frame.set(header, 0);
-      frame.set(encrypted, header.length);
-
+      const frame = pipeline.get(nextChunkToSend);
+      pipeline.delete(nextChunkToSend);
       this.mesh.broadcast("file", frame.buffer);
 
-      active.chunkIndex++;
+      nextChunkToSend++;
+      active.chunksSent = nextChunkToSend;
+      active.bytesSent = Math.min(nextChunkToSend * CHUNK_SIZE, active.file.size);
+
+      if (nextChunkToRead < total) {
+        const idx = nextChunkToRead++;
+        encryptChunk(idx).then((frame) => pipeline.set(idx, frame));
+      }
+
+      const elapsed = (Date.now() - active.startTime) / 1000;
+      const speedBps = elapsed > 0.5 ? active.bytesSent / elapsed : 0;
+      const remaining = active.file.size - active.bytesSent;
+      const etaSec = speedBps > 0 ? remaining / speedBps : null;
+
       this.dispatchEvent(new CustomEvent("send-progress", {
-        detail: { id: active.id, sent: active.chunkIndex, total: active.totalChunks },
+        detail: {
+          id: active.id,
+          sent: nextChunkToSend,
+          total,
+          bytesSent: active.bytesSent,
+          fileSize: active.file.size,
+          speedBps,
+          etaSec,
+        },
       }));
     }
 
@@ -98,14 +144,15 @@ export class FileTransferManager extends EventTarget {
       const channel = this.mesh.fileChannel;
       if (!channel) return resolve();
       channel.bufferedAmountLowThreshold = BUFFERED_AMOUNT_LOW;
-      const handler = () => { channel.removeEventListener("bufferedamountlow", handler); resolve(); };
+      const handler = () => {
+        channel.removeEventListener("bufferedamountlow", handler);
+        resolve();
+      };
       channel.addEventListener("bufferedamountlow", handler);
     });
   }
 
-  resumeIfNeeded() {
-    if (this.outActive) this._sendChunksFrom(this.outActive.chunkIndex);
-  }
+  resumeIfNeeded() {}
 
   async _onFileData(data, fromPeerId) {
     if (typeof data === "string") {
@@ -120,15 +167,16 @@ export class FileTransferManager extends EventTarget {
           total: msg.totalChunks,
           chunks: new Array(msg.totalChunks),
           received: 0,
+          bytesReceived: 0,
           fromPeerId,
           transferKey,
+          startTime: Date.now(),
         });
         this.dispatchEvent(new CustomEvent("receive-start", {
           detail: { id: transferKey, name: msg.name, size: msg.size },
         }));
       } else if (msg.t === "complete") {
-        // find the transfer from this peer
-        for (const [key, active] of this.inActives) {
+        for (const [, active] of this.inActives) {
           if (active.fromPeerId === fromPeerId && active.id === msg.id) {
             await this._finishIncoming(active);
             break;
@@ -145,28 +193,48 @@ export class FileTransferManager extends EventTarget {
       return;
     }
 
-    // Binary chunk — identify which transfer it belongs to by sender
     const bytes = new Uint8Array(data);
     const chunkIndex = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, false);
     const encrypted = bytes.slice(4);
-    const plain = await CryptoModule.decryptBytes(this.key, encrypted);
 
-    // Find the active transfer for this sender
     let active = null;
     for (const a of this.inActives.values()) {
       if (a.fromPeerId === fromPeerId) { active = a; break; }
     }
     if (!active) return;
 
-    active.chunks[chunkIndex] = plain;
-    active.received++;
+    CryptoModule.decryptBytes(this.key, encrypted).then((plain) => {
+      active.chunks[chunkIndex] = plain;
+      active.received++;
+      active.bytesReceived = Math.min(active.received * CHUNK_SIZE, active.size);
 
-    this.dispatchEvent(new CustomEvent("receive-progress", {
-      detail: { id: active.transferKey, received: active.received, total: active.total },
-    }));
+      const elapsed = (Date.now() - active.startTime) / 1000;
+      const speedBps = elapsed > 0.5 ? active.bytesReceived / elapsed : 0;
+      const remaining = active.size - active.bytesReceived;
+      const etaSec = speedBps > 0 ? remaining / speedBps : null;
+
+      this.dispatchEvent(new CustomEvent("receive-progress", {
+        detail: {
+          id: active.transferKey,
+          received: active.received,
+          total: active.total,
+          bytesReceived: active.bytesReceived,
+          fileSize: active.size,
+          speedBps,
+          etaSec,
+        },
+      }));
+    });
   }
 
   async _finishIncoming(active) {
+    await new Promise((resolve) => {
+      const check = () => {
+        if (active.received >= active.total) return resolve();
+        setTimeout(check, 10);
+      };
+      check();
+    });
     const blob = new Blob(active.chunks, { type: active.mime });
     this.dispatchEvent(new CustomEvent("receive-complete", {
       detail: { id: active.transferKey, name: active.name, size: active.size, blob },
