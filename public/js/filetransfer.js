@@ -1,44 +1,82 @@
-// filetransfer.js — high-speed + reliable chunked file transfer.
-// KEY FIX: All messages (meta, chunks, complete) sent as binary ArrayBuffer.
-//          Mixed string/binary on same DataChannel causes messages to be dropped
-//          on some mobile browsers (Chrome Android, Brave, etc).
+// filetransfer.js — robust multi-file transfer over WebRTC DataChannel.
+// All messages are binary (no mixed string/binary — mobile browsers drop strings).
+// Chunk frames carry the transfer ID so receiver always routes to correct file.
 
 import { CryptoModule } from "./crypto.js";
 
-const CHUNK_SIZE           = 256 * 1024;
-const PIPELINE_DEPTH       = 6;
-const BUFFERED_AMOUNT_HIGH = 8 * 1024 * 1024;
-const BUFFERED_AMOUNT_LOW  =   512 * 1024;
-const PROGRESS_INTERVAL_MS = 80;
+// ── Tuning ───────────────────────────────────────────────────────────────────
+const CHUNK_SIZE           = 16 * 1024;   // 16 KB — safe for all mobile browsers
+const PIPELINE_DEPTH       = 8;           // encrypt N chunks ahead of sending
+const BUFFERED_AMOUNT_HIGH = 4 * 1024 * 1024;
+const BUFFERED_AMOUNT_LOW  =   256 * 1024;
+const PROGRESS_INTERVAL_MS = 100;
 
-// ── Message type bytes (first byte of every frame) ──────────────────────────
+// ── Wire protocol (first byte = type) ────────────────────────────────────────
+// MSG_META     : [0x01][JSON bytes]          — file metadata
+// MSG_CHUNK    : [0x02][8B id][4B idx][data] — encrypted chunk
+// MSG_COMPLETE : [0x03][8B id]               — all chunks sent
+// MSG_CANCEL   : [0x04][8B id]               — transfer aborted
+//
+// Transfer ID is a fixed 8-byte ASCII string embedded in every binary frame
+// so the receiver can always route chunks to the correct file, even when
+// multiple transfers are in-flight simultaneously.
+
 const MSG_META     = 0x01;
 const MSG_CHUNK    = 0x02;
 const MSG_COMPLETE = 0x03;
 const MSG_CANCEL   = 0x04;
+const ID_BYTES     = 8; // bytes reserved for transfer id in binary frames
+
+const enc = new TextEncoder();
+const dec = new TextDecoder();
 
 function genId() {
-  return crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
+  // 8-char alphanumeric, fits in exactly ID_BYTES bytes when ASCII-encoded
+  const arr = crypto.getRandomValues(new Uint8Array(6));
+  return btoa(String.fromCharCode(...arr)).replace(/[^a-zA-Z0-9]/g, "x").slice(0, 8);
 }
 
-// Encode a JS object to a binary frame with a type-byte prefix
-function encodeJSON(typeByte, obj) {
-  const json  = JSON.stringify(obj);
-  const bytes = new TextEncoder().encode(json);
-  const frame = new Uint8Array(1 + bytes.length);
-  frame[0] = typeByte;
-  frame.set(bytes, 1);
-  return frame.buffer;
+function writeId(view, offset, id) {
+  const b = enc.encode(id.padEnd(ID_BYTES, "\0"));
+  for (let i = 0; i < ID_BYTES; i++) view.setUint8(offset + i, b[i]);
 }
 
-// Encode a chunk frame: [0x02][4-byte index BE][encrypted bytes]
-function encodeChunk(index, encrypted) {
-  const frame = new Uint8Array(5 + encrypted.length);
-  frame[0] = MSG_CHUNK;
-  new DataView(frame.buffer).setUint32(1, index, false);
-  frame.set(encrypted, 5);
-  return frame.buffer;
+function readId(bytes, offset) {
+  return dec.decode(bytes.slice(offset, offset + ID_BYTES)).replace(/\0/g, "");
 }
+
+function encodeControlMsg(typeByte, id) {
+  // [type 1B][id 8B]
+  const buf  = new ArrayBuffer(1 + ID_BYTES);
+  const view = new DataView(buf);
+  view.setUint8(0, typeByte);
+  writeId(view, 1, id);
+  return buf;
+}
+
+function encodeMetaMsg(id, meta) {
+  // [0x01][id 8B][JSON bytes]
+  const json  = enc.encode(JSON.stringify(meta));
+  const buf   = new ArrayBuffer(1 + ID_BYTES + json.length);
+  const view  = new DataView(buf);
+  view.setUint8(0, MSG_META);
+  writeId(view, 1, id);
+  new Uint8Array(buf, 1 + ID_BYTES).set(json);
+  return buf;
+}
+
+function encodeChunkMsg(id, index, encrypted) {
+  // [0x02][id 8B][index 4B][encrypted]
+  const buf  = new ArrayBuffer(1 + ID_BYTES + 4 + encrypted.length);
+  const view = new DataView(buf);
+  view.setUint8(0, MSG_CHUNK);
+  writeId(view, 1, id);
+  view.setUint32(1 + ID_BYTES, index, false);
+  new Uint8Array(buf, 1 + ID_BYTES + 4).set(encrypted);
+  return buf;
+}
+
+// ── Main class ───────────────────────────────────────────────────────────────
 
 export class FileTransferManager extends EventTarget {
   constructor(mesh, cryptoKey) {
@@ -48,7 +86,7 @@ export class FileTransferManager extends EventTarget {
 
     this.outQueue  = [];
     this.outActive = null;
-    this.inActives = new Map();
+    this.inActives = new Map(); // transferKey (`${peerId}:${id}`) → state
 
     mesh.addEventListener("data", (e) => {
       if (e.detail.kind === "file")
@@ -56,7 +94,7 @@ export class FileTransferManager extends EventTarget {
     });
   }
 
-  // ── Sending ──────────────────────────────────────────────────────────────
+  // ── Send side ─────────────────────────────────────────────────────────────
 
   enqueue(files) {
     for (const file of files) {
@@ -71,18 +109,15 @@ export class FileTransferManager extends EventTarget {
 
   async _pump() {
     if (this.outActive || this.outQueue.length === 0) return;
-    const job         = this.outQueue.shift();
-    const totalChunks = Math.ceil(job.file.size / CHUNK_SIZE) || 1;
+    const { id, file } = this.outQueue.shift();
+    const totalChunks  = Math.ceil(file.size / CHUNK_SIZE) || 1;
 
-    this.outActive = { id: job.id, file: job.file, totalChunks,
-                       startTime: Date.now(), bytesSent: 0 };
+    this.outActive = { id, file, totalChunks, startTime: Date.now(), bytesSent: 0 };
 
-    // Send meta as binary
-    this.mesh.broadcast("file", encodeJSON(MSG_META, {
-      id: job.id,
-      name: job.file.name,
-      size: job.file.size,
-      mime: job.file.type || "application/octet-stream",
+    this.mesh.broadcast("file", encodeMetaMsg(id, {
+      name: file.name,
+      size: file.size,
+      mime: file.type || "application/octet-stream",
       totalChunks,
     }));
 
@@ -92,15 +127,14 @@ export class FileTransferManager extends EventTarget {
   async _sendAllChunks() {
     const active = this.outActive;
     if (!active) return;
-
-    const total    = active.totalChunks;
+    const { id, file, totalChunks: total } = active;
     const pipeline = new Map(); // index → Promise<ArrayBuffer>
 
     const makeFrame = async (i) => {
       const start     = i * CHUNK_SIZE;
-      const slice     = await active.file.slice(start, start + CHUNK_SIZE).arrayBuffer();
+      const slice     = await file.slice(start, start + CHUNK_SIZE).arrayBuffer();
       const encrypted = await CryptoModule.encryptBytes(this.key, slice);
-      return encodeChunk(i, encrypted);
+      return encodeChunkMsg(id, i, encrypted);
     };
 
     // Pre-fill pipeline
@@ -110,44 +144,39 @@ export class FileTransferManager extends EventTarget {
       readHead++;
     }
 
-    let lastProgressTs = 0;
+    let lastTs = 0;
 
-    for (let sendIdx = 0; sendIdx < total; sendIdx++) {
+    for (let i = 0; i < total; i++) {
+      // Backpressure
       while (this.mesh.bufferedAmount("file") > BUFFERED_AMOUNT_HIGH) {
         await this._waitForDrain();
       }
 
-      const frame = await pipeline.get(sendIdx);
-      pipeline.delete(sendIdx);
+      const frame = await pipeline.get(i);
+      pipeline.delete(i);
 
-      if (readHead < total) {
-        pipeline.set(readHead, makeFrame(readHead));
-        readHead++;
-      }
+      if (readHead < total) { pipeline.set(readHead, makeFrame(readHead)); readHead++; }
 
       this.mesh.broadcast("file", frame);
-
-      active.bytesSent = Math.min((sendIdx + 1) * CHUNK_SIZE, active.file.size);
+      active.bytesSent = Math.min((i + 1) * CHUNK_SIZE, file.size);
 
       const now = Date.now();
-      if (now - lastProgressTs >= PROGRESS_INTERVAL_MS || sendIdx === total - 1) {
-        lastProgressTs = now;
+      if (now - lastTs >= PROGRESS_INTERVAL_MS || i === total - 1) {
+        lastTs = now;
         const elapsed  = (now - active.startTime) / 1000;
         const speedBps = elapsed > 0.5 ? active.bytesSent / elapsed : 0;
-        const etaSec   = speedBps > 0 ? (active.file.size - active.bytesSent) / speedBps : null;
+        const etaSec   = speedBps > 0 ? (file.size - active.bytesSent) / speedBps : null;
         this.dispatchEvent(new CustomEvent("send-progress", {
-          detail: {
-            id: active.id, sent: sendIdx + 1, total,
-            bytesSent: active.bytesSent, fileSize: active.file.size,
-            speedBps, etaSec,
-          },
+          detail: { id, sent: i + 1, total,
+                    bytesSent: active.bytesSent, fileSize: file.size,
+                    speedBps, etaSec },
         }));
       }
     }
 
-    // Send "complete" as binary — NOT a string — so it's never lost on mobile
-    this.mesh.broadcast("file", encodeJSON(MSG_COMPLETE, { id: active.id }));
-    this.dispatchEvent(new CustomEvent("send-complete", { detail: { id: active.id } }));
+    // Complete signal carries the ID so receiver knows which transfer finished
+    this.mesh.broadcast("file", encodeControlMsg(MSG_COMPLETE, id));
+    this.dispatchEvent(new CustomEvent("send-complete", { detail: { id } }));
     this.outActive = null;
     this._pump();
   }
@@ -164,34 +193,33 @@ export class FileTransferManager extends EventTarget {
 
   resumeIfNeeded() {}
 
-  // ── Receiving ─────────────────────────────────────────────────────────────
-  // _onFileData is synchronous. All data arrives as ArrayBuffer.
-  // First byte = message type. Everything else follows.
+  // ── Receive side ──────────────────────────────────────────────────────────
+  // Synchronous — no await, no races. Every binary frame carries the transfer
+  // ID so routing is always exact, even with multiple concurrent transfers.
 
   _onFileData(data, fromPeerId) {
-    // Everything is binary now — reject strings defensively
-    if (typeof data === "string") return;
+    if (typeof data === "string") return; // reject legacy strings defensively
 
-    const bytes    = new Uint8Array(data);
+    const bytes = new Uint8Array(data);
     if (bytes.length < 1) return;
-    const msgType  = bytes[0];
+    const type = bytes[0];
 
-    if (msgType === MSG_META) {
-      let meta;
-      try { meta = JSON.parse(new TextDecoder().decode(bytes.slice(1))); }
-      catch { return; }
+    if (type === MSG_META) {
+      if (bytes.length < 1 + ID_BYTES) return;
+      const id  = readId(bytes, 1);
+      let   meta;
+      try { meta = JSON.parse(dec.decode(bytes.slice(1 + ID_BYTES))); } catch { return; }
 
-      const transferKey = `${fromPeerId}:${meta.id}`;
+      const transferKey = `${fromPeerId}:${id}`;
       this.inActives.set(transferKey, {
-        id: meta.id, name: meta.name, size: meta.size, mime: meta.mime,
+        id, name: meta.name, size: meta.size, mime: meta.mime,
         total: meta.totalChunks,
         chunks: new Array(meta.totalChunks).fill(null),
         decryptedCount: 0,
         completeReceived: false,
         finished: false,
         fromPeerId, transferKey,
-        startTime: Date.now(),
-        lastProgressTs: 0,
+        startTime: Date.now(), lastProgressTs: 0,
       });
       this.dispatchEvent(new CustomEvent("receive-start", {
         detail: { id: transferKey, name: meta.name, size: meta.size },
@@ -199,53 +227,52 @@ export class FileTransferManager extends EventTarget {
       return;
     }
 
-    if (msgType === MSG_COMPLETE) {
-      let msg;
-      try { msg = JSON.parse(new TextDecoder().decode(bytes.slice(1))); }
-      catch { return; }
-
-      for (const active of this.inActives.values()) {
-        if (active.fromPeerId === fromPeerId && active.id === msg.id) {
-          active.completeReceived = true;
-          this._checkAndFinish(active);
-          break;
-        }
+    if (type === MSG_COMPLETE) {
+      if (bytes.length < 1 + ID_BYTES) return;
+      const id  = readId(bytes, 1);
+      const key = `${fromPeerId}:${id}`;
+      const active = this.inActives.get(key);
+      if (active) {
+        active.completeReceived = true;
+        this._checkAndFinish(active);
       }
       return;
     }
 
-    if (msgType === MSG_CANCEL) {
-      let msg;
-      try { msg = JSON.parse(new TextDecoder().decode(bytes.slice(1))); }
-      catch { return; }
-
-      for (const [key, active] of this.inActives) {
-        if (active.fromPeerId === fromPeerId && active.id === msg.id) {
-          this.inActives.delete(key);
-          this.dispatchEvent(new CustomEvent("receive-cancelled", { detail: { id: key } }));
-          break;
-        }
+    if (type === MSG_CANCEL) {
+      if (bytes.length < 1 + ID_BYTES) return;
+      const id  = readId(bytes, 1);
+      const key = `${fromPeerId}:${id}`;
+      const active = this.inActives.get(key);
+      if (active) {
+        this.inActives.delete(key);
+        this.dispatchEvent(new CustomEvent("receive-cancelled", { detail: { id: key } }));
       }
       return;
     }
 
-    if (msgType === MSG_CHUNK) {
-      if (bytes.length < 5) return;
+    if (type === MSG_CHUNK) {
+      // [0x02][id 8B][index 4B][encrypted...]
+      if (bytes.length < 1 + ID_BYTES + 4) return;
+      const id         = readId(bytes, 1);
+      const key        = `${fromPeerId}:${id}`;
+      const active     = this.inActives.get(key); // exact lookup — no wrong-file routing
+      if (!active || active.finished) return;
 
-      let active = null;
-      for (const a of this.inActives.values()) {
-        if (a.fromPeerId === fromPeerId) { active = a; break; }
-      }
-      if (!active) return;
+      const chunkIndex = new DataView(bytes.buffer, bytes.byteOffset + 1 + ID_BYTES, 4)
+                           .getUint32(0, false);
+      const encrypted  = bytes.buffer.slice(
+        bytes.byteOffset + 1 + ID_BYTES + 4,
+        bytes.byteOffset + bytes.length
+      );
 
-      const chunkIndex = new DataView(bytes.buffer, bytes.byteOffset + 1, 4).getUint32(0, false);
-      // Slice from original buffer to avoid extra copy
-      const encrypted  = bytes.buffer.slice(bytes.byteOffset + 5, bytes.byteOffset + bytes.length);
+      if (chunkIndex >= active.total) return; // sanity
 
       const cap = active;
       const idx = chunkIndex;
 
       CryptoModule.decryptBytes(this.key, encrypted).then((plain) => {
+        if (cap.finished) return; // already done, discard
         cap.chunks[idx] = plain;
         cap.decryptedCount++;
 
@@ -257,19 +284,15 @@ export class FileTransferManager extends EventTarget {
           const speedBps = elapsed > 0.5 ? bytesRx / elapsed : 0;
           const etaSec   = speedBps > 0 ? (cap.size - bytesRx) / speedBps : null;
           this.dispatchEvent(new CustomEvent("receive-progress", {
-            detail: {
-              id: cap.transferKey,
-              received: cap.decryptedCount, total: cap.total,
-              bytesReceived: bytesRx, fileSize: cap.size,
-              speedBps, etaSec,
-            },
+            detail: { id: cap.transferKey,
+                      received: cap.decryptedCount, total: cap.total,
+                      bytesReceived: bytesRx, fileSize: cap.size,
+                      speedBps, etaSec },
           }));
         }
 
         this._checkAndFinish(cap);
-      }).catch((err) => {
-        console.error("Decrypt failed chunk", idx, err);
-      });
+      }).catch((err) => console.error("Decrypt failed chunk", idx, err));
     }
   }
 
@@ -277,13 +300,12 @@ export class FileTransferManager extends EventTarget {
     if (active.finished)          return;
     if (!active.completeReceived) return;
     if (active.decryptedCount < active.total) return;
+    // Verify no gaps
     for (let i = 0; i < active.total; i++) {
       if (active.chunks[i] === null) return;
     }
-
     active.finished = true;
     this.inActives.delete(active.transferKey);
-
     const blob = new Blob(active.chunks, { type: active.mime });
     this.dispatchEvent(new CustomEvent("receive-complete", {
       detail: { id: active.transferKey, name: active.name, size: active.size, blob },
