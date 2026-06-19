@@ -5,10 +5,10 @@
 
 import { CryptoModule } from "./crypto.js";
 
-const CHUNK_SIZE = 512 * 1024;           // 512KB chunks
-const PIPELINE_DEPTH = 8;                // encrypt 8 chunks ahead in parallel
-const BUFFERED_AMOUNT_HIGH = 8 * 1024 * 1024;  // 8MB buffer before pausing
-const BUFFERED_AMOUNT_LOW  = 1 * 1024 * 1024;  // resume at 1MB
+const CHUNK_SIZE = 512 * 1024;
+const PIPELINE_DEPTH = 8;
+const BUFFERED_AMOUNT_HIGH = 8 * 1024 * 1024;
+const BUFFERED_AMOUNT_LOW  = 1 * 1024 * 1024;
 
 function genId() {
   return crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
@@ -171,6 +171,7 @@ export class FileTransferManager extends EventTarget {
           fromPeerId,
           transferKey,
           startTime: Date.now(),
+          pendingDecrypts: [],
         });
         this.dispatchEvent(new CustomEvent("receive-start", {
           detail: { id: transferKey, name: msg.name, size: msg.size },
@@ -203,7 +204,7 @@ export class FileTransferManager extends EventTarget {
     }
     if (!active) return;
 
-    CryptoModule.decryptBytes(this.key, encrypted).then((plain) => {
+    const decryptPromise = CryptoModule.decryptBytes(this.key, encrypted).then((plain) => {
       active.chunks[chunkIndex] = plain;
       active.received++;
       active.bytesReceived = Math.min(active.received * CHUNK_SIZE, active.size);
@@ -225,16 +226,11 @@ export class FileTransferManager extends EventTarget {
         },
       }));
     });
+    active.pendingDecrypts.push(decryptPromise);
   }
 
   async _finishIncoming(active) {
-    await new Promise((resolve) => {
-      const check = () => {
-        if (active.received >= active.total) return resolve();
-        setTimeout(check, 10);
-      };
-      check();
-    });
+    await Promise.all(active.pendingDecrypts);
     const blob = new Blob(active.chunks, { type: active.mime });
     this.dispatchEvent(new CustomEvent("receive-complete", {
       detail: { id: active.transferKey, name: active.name, size: active.size, blob },
