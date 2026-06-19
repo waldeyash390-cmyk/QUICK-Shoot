@@ -60,13 +60,12 @@ const state = {
   roomCode: null,
   myPeerId: null,
   signaling: null,
-  mesh: null,         // PeerMesh replaces peerLink
+  mesh: null,
   cryptoKey: null,
   fileTransfer: null,
   connectedAt: null,
   timerHandle: null,
   myMsgCount: 0,
-  // Track which peers are typing
   typingPeers: new Set(),
 };
 
@@ -92,7 +91,6 @@ function setStatus(stateName, label) {
 function updatePeerCount() {
   if (!state.mesh) return;
   const n = state.mesh.connectedPeerCount();
-  // n peers + me = n+1 total in room
   els.peerCount.textContent = `${n + 1} in room`;
 }
 
@@ -186,11 +184,9 @@ async function handleSignalingMessage(msg) {
       const shareUrl = `${location.origin}${location.pathname}?code=${encodeURIComponent(msg.code)}`;
       els.qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&qzone=1&data=${encodeURIComponent(shareUrl)}`;
       show(els.qrImg);
-      // Host creates the mesh but waits; no peers yet
       state.cryptoKey = await CryptoModule.deriveKeyFromRoomCode(state.roomCode);
       state.mesh = new PeerMesh(state.signaling, state.myPeerId);
       wireMeshEvents();
-      // Host enters chat immediately so they can see who joins
       onFirstConnect();
       break;
     }
@@ -201,21 +197,17 @@ async function handleSignalingMessage(msg) {
       state.cryptoKey = await CryptoModule.deriveKeyFromRoomCode(state.roomCode);
       state.mesh = new PeerMesh(state.signaling, state.myPeerId);
       wireMeshEvents();
-      // Connect to every peer already in the room
       if (msg.peers.length > 0) {
         await state.mesh.connectToExistingPeers(msg.peers);
       } else {
-        // Room was empty (e.g. host left, room not destroyed yet — shouldn't normally happen)
         onFirstConnect();
       }
       break;
     }
 
     case "peer-joined": {
-      // Someone new entered; as the existing user we don't initiate — they do
       if (state.mesh) {
         await state.mesh.acceptNewPeer(msg.peerId);
-        // Let them know we're here via mesh event
       }
       break;
     }
@@ -248,7 +240,7 @@ async function handleSignalingMessage(msg) {
     }
 
     default:
-      break; // signal messages are consumed by PeerMesh internals
+      break;
   }
 }
 
@@ -465,24 +457,23 @@ function wireFileTransferEvents() {
     const li = document.getElementById(`file-${id}`);
     if (!li) return;
     const url = URL.createObjectURL(blob);
+    li.innerHTML = "";
+
     const fname = document.createElement("span");
     fname.className = "fname";
     fname.textContent = `↓ ${name}`;
+
+    // Use a real <a download> so it works on mobile browsers too.
+    // Programmatic .click() is blocked by mobile browsers outside a user gesture.
     const dlBtn = document.createElement("a");
     dlBtn.textContent = "Download";
-    dlBtn.href = "#";
-    dlBtn.addEventListener("click", (ev) => {
-      ev.preventDefault();
-      const tmp = document.createElement("a");
-      tmp.href = url;
-      tmp.download = name;
-      tmp.style.display = "none";
-      document.body.appendChild(tmp);
-      tmp.click();
-      document.body.removeChild(tmp);
+    dlBtn.href = url;
+    dlBtn.download = name;
+    dlBtn.className = "dl-btn";
+    dlBtn.addEventListener("click", () => {
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     });
-    li.innerHTML = "";
+
     li.append(fname, dlBtn);
   });
 }
