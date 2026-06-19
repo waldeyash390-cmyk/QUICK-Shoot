@@ -171,7 +171,8 @@ export class FileTransferManager extends EventTarget {
           fromPeerId,
           transferKey,
           startTime: Date.now(),
-          pendingDecrypts: [],
+          senderDone: false,
+          finished: false,
         });
         this.dispatchEvent(new CustomEvent("receive-start", {
           detail: { id: transferKey, name: msg.name, size: msg.size },
@@ -179,7 +180,9 @@ export class FileTransferManager extends EventTarget {
       } else if (msg.t === "complete") {
         for (const [, active] of this.inActives) {
           if (active.fromPeerId === fromPeerId && active.id === msg.id) {
-            await this._finishIncoming(active);
+            // Mark that the sender is done — finish as soon as all chunks are decrypted
+            active.senderDone = true;
+            this._tryFinish(active);
             break;
           }
         }
@@ -204,7 +207,7 @@ export class FileTransferManager extends EventTarget {
     }
     if (!active) return;
 
-    const decryptPromise = CryptoModule.decryptBytes(this.key, encrypted).then((plain) => {
+    CryptoModule.decryptBytes(this.key, encrypted).then((plain) => {
       active.chunks[chunkIndex] = plain;
       active.received++;
       active.bytesReceived = Math.min(active.received * CHUNK_SIZE, active.size);
@@ -225,16 +228,32 @@ export class FileTransferManager extends EventTarget {
           etaSec,
         },
       }));
+
+      // If sender already sent "complete" and all chunks are now decrypted, finish
+      if (active.senderDone && active.received === active.total) {
+        this._finishIncoming(active);
+      }
     });
-    active.pendingDecrypts.push(decryptPromise);
+  }
+
+  // Called when "complete" arrives; finishes immediately if all chunks are ready,
+  // otherwise the last decrypt callback will call _finishIncoming directly.
+  _tryFinish(active) {
+    if (active.received === active.total) {
+      this._finishIncoming(active);
+    }
+    // else: the last pending decrypt will see senderDone===true and call _finishIncoming
   }
 
   async _finishIncoming(active) {
-    await Promise.all(active.pendingDecrypts);
+    // Guard: prevent double-finish if _tryFinish and last decrypt race
+    if (active.finished) return;
+    active.finished = true;
+
     const blob = new Blob(active.chunks, { type: active.mime });
     this.dispatchEvent(new CustomEvent("receive-complete", {
       detail: { id: active.transferKey, name: active.name, size: active.size, blob },
     }));
     this.inActives.delete(active.transferKey);
   }
-}
+          }
