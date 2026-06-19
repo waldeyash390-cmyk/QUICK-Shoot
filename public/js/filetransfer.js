@@ -1,12 +1,16 @@
-// filetransfer.js — reliable chunked file transfer over WebRTC data channels.
-// Sending: reads file in chunks, encrypts each, sends sequentially with backpressure.
-// Receiving: collects all chunks, assembles blob only after ALL chunks are confirmed received.
+// filetransfer.js — high-speed + reliable chunked file transfer.
+// SENDING: pipeline encrypts N chunks ahead while sending current chunk,
+//          so the channel is never idle waiting for crypto.
+// RECEIVING: all chunks collected, blob assembled only after every chunk
+//            is confirmed decrypted — no race conditions.
 
 import { CryptoModule } from "./crypto.js";
 
-const CHUNK_SIZE = 64 * 1024; // 64 KB — smaller chunks = more reliable on mobile/slow links
-const BUFFERED_AMOUNT_HIGH = 4 * 1024 * 1024; // 4 MB backpressure threshold
-const BUFFERED_AMOUNT_LOW  = 512 * 1024;       // 512 KB resume threshold
+const CHUNK_SIZE          = 256 * 1024;  // 256 KB — good balance of speed vs reliability
+const PIPELINE_DEPTH      = 6;           // encrypt this many chunks ahead of sending
+const BUFFERED_AMOUNT_HIGH = 8 * 1024 * 1024; // 8 MB — pause sending above this
+const BUFFERED_AMOUNT_LOW  =   512 * 1024;     // 512 KB — resume sending below this
+const PROGRESS_INTERVAL_MS = 80;         // update UI at most every 80ms (no DOM thrash)
 
 function genId() {
   return crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
@@ -16,18 +20,15 @@ export class FileTransferManager extends EventTarget {
   constructor(mesh, cryptoKey) {
     super();
     this.mesh = mesh;
-    this.key = cryptoKey;
+    this.key  = cryptoKey;
 
-    this.outQueue = [];
+    this.outQueue  = [];
     this.outActive = null;
-
-    // Map of transferKey -> incoming transfer state
-    this.inActives = new Map();
+    this.inActives = new Map();   // transferKey → state
 
     mesh.addEventListener("data", (e) => {
-      if (e.detail.kind === "file") {
+      if (e.detail.kind === "file")
         this._onFileData(e.detail.data, e.detail.peerId);
-      }
     });
   }
 
@@ -46,23 +47,15 @@ export class FileTransferManager extends EventTarget {
 
   async _pump() {
     if (this.outActive || this.outQueue.length === 0) return;
-    const job = this.outQueue.shift();
+    const job        = this.outQueue.shift();
     const totalChunks = Math.ceil(job.file.size / CHUNK_SIZE) || 1;
 
-    this.outActive = {
-      id: job.id,
-      file: job.file,
-      totalChunks,
-      startTime: Date.now(),
-      bytesSent: 0,
-    };
+    this.outActive = { id: job.id, file: job.file, totalChunks,
+                       startTime: Date.now(), bytesSent: 0 };
 
-    // Send metadata first
     this.mesh.broadcast("file", JSON.stringify({
-      t: "meta",
-      id: job.id,
-      name: job.file.name,
-      size: job.file.size,
+      t: "meta", id: job.id,
+      name: job.file.name, size: job.file.size,
       mime: job.file.type || "application/octet-stream",
       totalChunks,
     }));
@@ -76,44 +69,66 @@ export class FileTransferManager extends EventTarget {
 
     const total = active.totalChunks;
 
-    for (let i = 0; i < total; i++) {
-      // Backpressure: wait if buffer is too full
+    // Pipeline: a map of chunkIndex → Promise<Uint8Array frame>
+    // We keep PIPELINE_DEPTH encryptions running ahead of the send cursor.
+    const pipeline = new Map();
+
+    const makeFrame = async (i) => {
+      const start     = i * CHUNK_SIZE;
+      const slice     = await active.file.slice(start, start + CHUNK_SIZE).arrayBuffer();
+      const encrypted = await CryptoModule.encryptBytes(this.key, slice);
+      const frame     = new Uint8Array(4 + encrypted.length);
+      new DataView(frame.buffer).setUint32(0, i, false);
+      frame.set(encrypted, 4);
+      return frame;
+    };
+
+    // Pre-fill the pipeline
+    let readHead = 0;
+    while (readHead < total && readHead < PIPELINE_DEPTH) {
+      pipeline.set(readHead, makeFrame(readHead));
+      readHead++;
+    }
+
+    let lastProgressTs = 0;
+
+    for (let sendIdx = 0; sendIdx < total; sendIdx++) {
+      // Backpressure — pause if WebRTC buffer is saturated
       while (this.mesh.bufferedAmount("file") > BUFFERED_AMOUNT_HIGH) {
         await this._waitForDrain();
       }
 
-      // Read and encrypt this chunk
-      const start = i * CHUNK_SIZE;
-      const slice = await active.file.slice(start, start + CHUNK_SIZE).arrayBuffer();
-      const encrypted = await CryptoModule.encryptBytes(this.key, slice);
+      // Wait for this chunk's encryption to finish
+      const frame = await pipeline.get(sendIdx);
+      pipeline.delete(sendIdx);
 
-      // Frame: [4 bytes chunk index BE] [encrypted data]
-      const frame = new Uint8Array(4 + encrypted.length);
-      new DataView(frame.buffer).setUint32(0, i, false);
-      frame.set(encrypted, 4);
+      // Kick off the next encryption immediately so it runs in parallel
+      if (readHead < total) {
+        pipeline.set(readHead, makeFrame(readHead));
+        readHead++;
+      }
 
       this.mesh.broadcast("file", frame.buffer);
 
-      active.bytesSent = Math.min((i + 1) * CHUNK_SIZE, active.file.size);
-      const elapsed = (Date.now() - active.startTime) / 1000;
-      const speedBps = elapsed > 0.5 ? active.bytesSent / elapsed : 0;
-      const remaining = active.file.size - active.bytesSent;
-      const etaSec = speedBps > 0 ? remaining / speedBps : null;
+      active.bytesSent = Math.min((sendIdx + 1) * CHUNK_SIZE, active.file.size);
 
-      this.dispatchEvent(new CustomEvent("send-progress", {
-        detail: {
-          id: active.id,
-          sent: i + 1,
-          total,
-          bytesSent: active.bytesSent,
-          fileSize: active.file.size,
-          speedBps,
-          etaSec,
-        },
-      }));
+      // Throttle progress events — no need to fire 1000/sec
+      const now = Date.now();
+      if (now - lastProgressTs >= PROGRESS_INTERVAL_MS || sendIdx === total - 1) {
+        lastProgressTs = now;
+        const elapsed  = (now - active.startTime) / 1000;
+        const speedBps = elapsed > 0.5 ? active.bytesSent / elapsed : 0;
+        const etaSec   = speedBps > 0 ? (active.file.size - active.bytesSent) / speedBps : null;
+        this.dispatchEvent(new CustomEvent("send-progress", {
+          detail: {
+            id: active.id, sent: sendIdx + 1, total,
+            bytesSent: active.bytesSent, fileSize: active.file.size,
+            speedBps, etaSec,
+          },
+        }));
+      }
     }
 
-    // All chunks sent — tell receiver we're done
     this.mesh.broadcast("file", JSON.stringify({ t: "complete", id: active.id }));
     this.dispatchEvent(new CustomEvent("send-complete", { detail: { id: active.id } }));
     this.outActive = null;
@@ -122,23 +137,22 @@ export class FileTransferManager extends EventTarget {
 
   _waitForDrain() {
     return new Promise((resolve) => {
-      const channel = this.mesh.fileChannel;
-      if (!channel) return resolve();
-      channel.bufferedAmountLowThreshold = BUFFERED_AMOUNT_LOW;
-      const handler = () => {
-        channel.removeEventListener("bufferedamountlow", handler);
-        resolve();
-      };
-      channel.addEventListener("bufferedamountlow", handler);
+      const ch = this.mesh.fileChannel;
+      if (!ch) return resolve();
+      ch.bufferedAmountLowThreshold = BUFFERED_AMOUNT_LOW;
+      const h = () => { ch.removeEventListener("bufferedamountlow", h); resolve(); };
+      ch.addEventListener("bufferedamountlow", h);
     });
   }
 
   resumeIfNeeded() {}
 
   // ── Receiving ─────────────────────────────────────────────────────────────
-  // NOTE: This is NOT async — we handle everything synchronously to avoid
-  // any race conditions with the event loop. Decryption promises are tracked
-  // and we only assemble the blob after ALL of them resolve.
+  // _onFileData is NOT async — synchronous dispatch avoids all race conditions.
+  // Decryptions run in parallel (fire-and-forget .then()), each updating a
+  // counter. The blob is assembled only when BOTH conditions are met:
+  //   • completeReceived === true   (sender sent the "complete" message)
+  //   • decryptedCount  === total   (every chunk decrypted successfully)
 
   _onFileData(data, fromPeerId) {
     if (typeof data === "string") {
@@ -148,30 +162,24 @@ export class FileTransferManager extends EventTarget {
       if (msg.t === "meta") {
         const transferKey = `${fromPeerId}:${msg.id}`;
         this.inActives.set(transferKey, {
-          id: msg.id,
-          name: msg.name,
-          size: msg.size,
-          mime: msg.mime,
+          id: msg.id, name: msg.name, size: msg.size, mime: msg.mime,
           total: msg.totalChunks,
-          // Pre-allocate array so chunks land at correct indices
           chunks: new Array(msg.totalChunks).fill(null),
-          decryptedCount: 0,   // how many chunks have finished decrypting
-          receivedCount: 0,    // how many binary frames arrived
-          completeReceived: false, // did we get the "complete" message
-          fromPeerId,
-          transferKey,
+          decryptedCount: 0,
+          completeReceived: false,
+          finished: false,
+          fromPeerId, transferKey,
           startTime: Date.now(),
+          lastProgressTs: 0,
         });
         this.dispatchEvent(new CustomEvent("receive-start", {
           detail: { id: transferKey, name: msg.name, size: msg.size },
         }));
 
       } else if (msg.t === "complete") {
-        // Find the matching active transfer
         for (const active of this.inActives.values()) {
           if (active.fromPeerId === fromPeerId && active.id === msg.id) {
             active.completeReceived = true;
-            // Check if all decryptions already finished before this message arrived
             this._checkAndFinish(active);
             break;
           }
@@ -189,81 +197,68 @@ export class FileTransferManager extends EventTarget {
       return;
     }
 
-    // Binary frame: find the active transfer for this peer
+    // Binary chunk
+    const bytes = new Uint8Array(data);
+    if (bytes.length < 4) return;
+
     let active = null;
     for (const a of this.inActives.values()) {
       if (a.fromPeerId === fromPeerId) { active = a; break; }
     }
     if (!active) return;
 
-    // Parse frame header
-    const bytes = new Uint8Array(data);
-    if (bytes.length < 4) return;
     const chunkIndex = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, false);
-    const encrypted = bytes.slice(4);
+    const encrypted  = bytes.slice(4);
 
-    active.receivedCount++;
+    // Capture by value — no closure-over-mutable-variable bugs
+    const cap = active;
+    const idx = chunkIndex;
 
-    // Decrypt async — but capture reference to active NOW (synchronously)
-    const capturedActive = active;
-    const capturedIndex = chunkIndex;
-
+    // All chunk decryptions run in parallel — maximum throughput on receiver too
     CryptoModule.decryptBytes(this.key, encrypted).then((plain) => {
-      capturedActive.chunks[capturedIndex] = plain;
-      capturedActive.decryptedCount++;
+      cap.chunks[idx] = plain;
+      cap.decryptedCount++;
 
-      const elapsed = (Date.now() - capturedActive.startTime) / 1000;
-      const bytesReceived = Math.min(capturedActive.decryptedCount * CHUNK_SIZE, capturedActive.size);
-      const speedBps = elapsed > 0.5 ? bytesReceived / elapsed : 0;
-      const remaining = capturedActive.size - bytesReceived;
-      const etaSec = speedBps > 0 ? remaining / speedBps : null;
+      // Throttled progress events
+      const now      = Date.now();
+      const bytesRx  = Math.min(cap.decryptedCount * CHUNK_SIZE, cap.size);
+      if (now - cap.lastProgressTs >= PROGRESS_INTERVAL_MS || cap.decryptedCount === cap.total) {
+        cap.lastProgressTs = now;
+        const elapsed  = (now - cap.startTime) / 1000;
+        const speedBps = elapsed > 0.5 ? bytesRx / elapsed : 0;
+        const etaSec   = speedBps > 0 ? (cap.size - bytesRx) / speedBps : null;
+        this.dispatchEvent(new CustomEvent("receive-progress", {
+          detail: {
+            id: cap.transferKey,
+            received: cap.decryptedCount, total: cap.total,
+            bytesReceived: bytesRx, fileSize: cap.size,
+            speedBps, etaSec,
+          },
+        }));
+      }
 
-      this.dispatchEvent(new CustomEvent("receive-progress", {
-        detail: {
-          id: capturedActive.transferKey,
-          received: capturedActive.decryptedCount,
-          total: capturedActive.total,
-          bytesReceived,
-          fileSize: capturedActive.size,
-          speedBps,
-          etaSec,
-        },
-      }));
-
-      // Each time a chunk finishes decrypting, check if we're done
-      this._checkAndFinish(capturedActive);
-
+      this._checkAndFinish(cap);
     }).catch((err) => {
-      console.error("Chunk decrypt failed at index", capturedIndex, err);
+      console.error("Decrypt failed chunk", idx, err);
     });
   }
 
-  // Called after every decrypt completes AND when "complete" message arrives.
-  // Assembles the blob only when BOTH conditions are true:
-  //   1. completeReceived === true  (sender said it's done)
-  //   2. decryptedCount === total   (all chunks decrypted successfully)
   _checkAndFinish(active) {
-    if (active.finished) return; // already done
-    if (!active.completeReceived) return; // still waiting for "complete" message
-    if (active.decryptedCount < active.total) return; // still waiting for chunks
+    if (active.finished)          return;
+    if (!active.completeReceived) return;
+    if (active.decryptedCount < active.total) return;
 
-    // Verify no chunk is missing
+    // Final safety check — no null slots
     for (let i = 0; i < active.total; i++) {
-      if (active.chunks[i] === null) return; // gap — shouldn't happen but be safe
+      if (active.chunks[i] === null) return;
     }
 
     active.finished = true;
-
-    const blob = new Blob(active.chunks, { type: active.mime });
     this.inActives.delete(active.transferKey);
 
+    const blob = new Blob(active.chunks, { type: active.mime });
     this.dispatchEvent(new CustomEvent("receive-complete", {
-      detail: {
-        id: active.transferKey,
-        name: active.name,
-        size: active.size,
-        blob,
-      },
+      detail: { id: active.transferKey, name: active.name, size: active.size, blob },
     }));
   }
 }
