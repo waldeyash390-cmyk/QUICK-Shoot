@@ -60,12 +60,13 @@ const state = {
   roomCode: null,
   myPeerId: null,
   signaling: null,
-  mesh: null,
+  mesh: null,         // PeerMesh replaces peerLink
   cryptoKey: null,
   fileTransfer: null,
   connectedAt: null,
   timerHandle: null,
   myMsgCount: 0,
+  // Track which peers are typing
   typingPeers: new Set(),
 };
 
@@ -91,6 +92,7 @@ function setStatus(stateName, label) {
 function updatePeerCount() {
   if (!state.mesh) return;
   const n = state.mesh.connectedPeerCount();
+  // n peers + me = n+1 total in room
   els.peerCount.textContent = `${n + 1} in room`;
 }
 
@@ -184,9 +186,11 @@ async function handleSignalingMessage(msg) {
       const shareUrl = `${location.origin}${location.pathname}?code=${encodeURIComponent(msg.code)}`;
       els.qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&qzone=1&data=${encodeURIComponent(shareUrl)}`;
       show(els.qrImg);
+      // Host creates the mesh but waits; no peers yet
       state.cryptoKey = await CryptoModule.deriveKeyFromRoomCode(state.roomCode);
       state.mesh = new PeerMesh(state.signaling, state.myPeerId);
       wireMeshEvents();
+      // Host enters chat immediately so they can see who joins
       onFirstConnect();
       break;
     }
@@ -197,17 +201,21 @@ async function handleSignalingMessage(msg) {
       state.cryptoKey = await CryptoModule.deriveKeyFromRoomCode(state.roomCode);
       state.mesh = new PeerMesh(state.signaling, state.myPeerId);
       wireMeshEvents();
+      // Connect to every peer already in the room
       if (msg.peers.length > 0) {
         await state.mesh.connectToExistingPeers(msg.peers);
       } else {
+        // Room was empty (e.g. host left, room not destroyed yet — shouldn't normally happen)
         onFirstConnect();
       }
       break;
     }
 
     case "peer-joined": {
+      // Someone new entered; as the existing user we don't initiate — they do
       if (state.mesh) {
         await state.mesh.acceptNewPeer(msg.peerId);
+        // Let them know we're here via mesh event
       }
       break;
     }
@@ -240,7 +248,7 @@ async function handleSignalingMessage(msg) {
     }
 
     default:
-      break;
+      break; // signal messages are consumed by PeerMesh internals
   }
 }
 
@@ -408,48 +416,144 @@ els.messageInput.addEventListener("keydown", (e) => {
 });
 
 // ---------------------------------------------------------------- files
+function formatSpeed(bps) {
+  if (!bps || bps <= 0) return "";
+  if (bps < 1024) return `${bps.toFixed(0)} B/s`;
+  if (bps < 1024 * 1024) return `${(bps / 1024).toFixed(1)} KB/s`;
+  return `${(bps / (1024 * 1024)).toFixed(2)} MB/s`;
+}
+
+function formatEta(sec) {
+  if (sec === null || sec === undefined || !isFinite(sec) || sec < 0) return "";
+  if (sec < 60) return `${Math.ceil(sec)}s left`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ${Math.ceil(sec % 60)}s left`;
+  return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m left`;
+}
+
+// Build a rich file-item row and return refs to its updatable parts
+function createFileItem({ id, name, size, direction }) {
+  const li = document.createElement("li");
+  li.className = "file-item file-item--active";
+  li.id = `file-${id}`;
+  li.innerHTML = `
+    <div class="fi-top">
+      <span class="fi-arrow">${direction === "up" ? "↑" : "↓"}</span>
+      <span class="fi-name">${escapeHtml(name)}</span>
+      <span class="fi-size">${formatBytes(size)}</span>
+    </div>
+    <div class="fi-bar-wrap">
+      <progress class="fi-progress" max="100" value="0"></progress>
+    </div>
+    <div class="fi-bottom">
+      <span class="fi-pct">0%</span>
+      <span class="fi-speed"></span>
+      <span class="fi-eta"></span>
+      <span class="fi-spacer"></span>
+      ${direction === "up" ? `
+        <button class="fi-btn fi-pause" title="Pause">⏸</button>
+        <button class="fi-btn fi-cancel" title="Cancel">✕</button>
+      ` : `
+        <button class="fi-btn fi-cancel" title="Cancel">✕</button>
+      `}
+    </div>`;
+  els.fileList.appendChild(li);
+
+  return {
+    li,
+    progress: li.querySelector(".fi-progress"),
+    pct:      li.querySelector(".fi-pct"),
+    speed:    li.querySelector(".fi-speed"),
+    eta:      li.querySelector(".fi-eta"),
+    pauseBtn: li.querySelector(".fi-pause"),
+    cancelBtn:li.querySelector(".fi-cancel"),
+  };
+}
+
 function wireFileTransferEvents() {
   const ft = state.fileTransfer;
 
+  // Track pause state per outgoing transfer id
+  const pausedIds = new Set();
+
   ft.addEventListener("queued", (e) => {
     const { id, name, size } = e.detail;
-    const li = document.createElement("li");
-    li.className = "file-item";
-    li.id = `file-${id}`;
-    li.innerHTML = `
-      <span class="fname">↑ ${escapeHtml(name)}</span>
-      <progress max="100" value="0"></progress>
-      <span class="fmeta">${formatBytes(size)}</span>`;
-    els.fileList.appendChild(li);
+    const refs = createFileItem({ id, name, size, direction: "up" });
+
+    if (refs.pauseBtn) {
+      refs.pauseBtn.addEventListener("click", () => {
+        if (pausedIds.has(id)) {
+          // Resume
+          pausedIds.delete(id);
+          refs.pauseBtn.textContent = "⏸";
+          refs.pauseBtn.title = "Pause";
+          refs.li.classList.remove("file-item--paused");
+          if (ft.resumeIfNeeded) ft.resumeIfNeeded();
+        } else {
+          // Pause
+          pausedIds.add(id);
+          refs.pauseBtn.textContent = "▶";
+          refs.pauseBtn.title = "Resume";
+          refs.li.classList.add("file-item--paused");
+          refs.eta.textContent = "Paused";
+          refs.speed.textContent = "";
+        }
+      });
+    }
+
+    if (refs.cancelBtn) {
+      refs.cancelBtn.addEventListener("click", () => {
+        if (ft.cancel) ft.cancel(id);
+        refs.li.remove();
+        pausedIds.delete(id);
+      });
+    }
   });
 
   ft.addEventListener("send-progress", (e) => {
-    const { id, sent, total } = e.detail;
+    const { id, sent, total, speedBps, etaSec } = e.detail;
+    if (pausedIds.has(id)) return;
     const li = document.getElementById(`file-${id}`);
-    if (li) li.querySelector("progress").value = Math.round((sent / total) * 100);
+    if (!li) return;
+    const pct = Math.round((sent / total) * 100);
+    li.querySelector(".fi-progress").value = pct;
+    li.querySelector(".fi-pct").textContent  = `${pct}%`;
+    li.querySelector(".fi-speed").textContent = formatSpeed(speedBps);
+    li.querySelector(".fi-eta").textContent   = formatEta(etaSec);
   });
 
   ft.addEventListener("send-complete", (e) => {
     const li = document.getElementById(`file-${e.detail.id}`);
-    if (li) li.querySelector("progress").remove();
+    if (!li) return;
+    li.querySelector(".fi-progress").value   = 100;
+    li.querySelector(".fi-pct").textContent  = "100%";
+    li.querySelector(".fi-speed").textContent = "";
+    li.querySelector(".fi-eta").textContent   = "Sent ✓";
+    li.querySelector(".fi-bottom").querySelectorAll(".fi-btn").forEach(b => b.remove());
+    li.classList.remove("file-item--active", "file-item--paused");
+    li.classList.add("file-item--done");
   });
 
   ft.addEventListener("receive-start", (e) => {
     const { id, name, size } = e.detail;
-    const li = document.createElement("li");
-    li.className = "file-item";
-    li.id = `file-${id}`;
-    li.innerHTML = `
-      <span class="fname">↓ ${escapeHtml(name)}</span>
-      <progress max="100" value="0"></progress>
-      <span class="fmeta">${formatBytes(size)}</span>`;
-    els.fileList.appendChild(li);
+    const refs = createFileItem({ id, name, size, direction: "down" });
+
+    if (refs.cancelBtn) {
+      refs.cancelBtn.addEventListener("click", () => {
+        // Can't truly cancel a WebRTC receive mid-stream, just hide it
+        refs.li.remove();
+      });
+    }
   });
 
   ft.addEventListener("receive-progress", (e) => {
-    const { id, received, total } = e.detail;
+    const { id, received, total, speedBps, etaSec } = e.detail;
     const li = document.getElementById(`file-${id}`);
-    if (li) li.querySelector("progress").value = Math.round((received / total) * 100);
+    if (!li) return;
+    const pct = Math.round((received / total) * 100);
+    li.querySelector(".fi-progress").value   = pct;
+    li.querySelector(".fi-pct").textContent  = `${pct}%`;
+    li.querySelector(".fi-speed").textContent = formatSpeed(speedBps);
+    li.querySelector(".fi-eta").textContent   = formatEta(etaSec);
   });
 
   ft.addEventListener("receive-complete", (e) => {
@@ -457,24 +561,29 @@ function wireFileTransferEvents() {
     const li = document.getElementById(`file-${id}`);
     if (!li) return;
     const url = URL.createObjectURL(blob);
-    li.innerHTML = "";
 
-    const fname = document.createElement("span");
-    fname.className = "fname";
-    fname.textContent = `↓ ${name}`;
+    li.classList.remove("file-item--active");
+    li.classList.add("file-item--done");
+    li.innerHTML = `
+      <div class="fi-top">
+        <span class="fi-arrow fi-arrow--done">↓</span>
+        <span class="fi-name">${escapeHtml(name)}</span>
+        <span class="fi-size">${formatBytes(blob.size)}</span>
+      </div>
+      <div class="fi-bottom">
+        <span class="fi-eta fi-done-label">Done ✓</span>
+        <span class="fi-spacer"></span>
+        <a class="fi-btn fi-dl-btn" href="${url}" download="${escapeHtml(name)}">⬇ Download</a>
+      </div>`;
 
-    // Use a real <a download> so it works on mobile browsers too.
-    // Programmatic .click() is blocked by mobile browsers outside a user gesture.
-    const dlBtn = document.createElement("a");
-    dlBtn.textContent = "Download";
-    dlBtn.href = url;
-    dlBtn.download = name;
-    dlBtn.className = "dl-btn";
-    dlBtn.addEventListener("click", () => {
+    li.querySelector(".fi-dl-btn").addEventListener("click", () => {
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     });
+  });
 
-    li.append(fname, dlBtn);
+  ft.addEventListener("receive-cancelled", (e) => {
+    const li = document.getElementById(`file-${e.detail.id}`);
+    if (li) li.remove();
   });
 }
 
