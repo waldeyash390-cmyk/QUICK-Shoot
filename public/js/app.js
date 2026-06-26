@@ -10,9 +10,6 @@ const $ = (id) => document.getElementById(id);
 
 const els = {
   roomTag: $("roomTag"),
-  sessionTimer: $("sessionTimer"),
-  quality: $("quality"),
-  statusDot: $("statusDot"),
   settingsBtn: $("settingsBtn"),
 
   screenHome: $("screenHome"),
@@ -84,8 +81,6 @@ function showScreen(name) {
 }
 
 function setStatus(stateName, label) {
-  els.statusDot.dataset.state = stateName;
-  els.statusDot.querySelector(".status-text").textContent = label;
   els.settingsConnState.textContent = label;
 }
 
@@ -124,8 +119,6 @@ function resetToHome() {
   showScreen("home");
   setStatus("offline", "Offline");
   hide(els.roomTag);
-  hide(els.sessionTimer);
-  hide(els.quality);
   hide(els.peerCount);
   hide(els.settingsBtn);
   els.messages.innerHTML = "";
@@ -264,8 +257,6 @@ function onFirstConnect() {
   showScreen("chat");
   els.roomTag.textContent = state.roomCode;
   show(els.roomTag);
-  show(els.sessionTimer);
-  show(els.quality);
   show(els.peerCount);
   show(els.settingsBtn);
   els.settingsRoomCode.textContent = state.roomCode;
@@ -276,7 +267,6 @@ function onFirstConnect() {
   state.timerHandle = setInterval(() => {
     const secs = Math.floor((Date.now() - state.connectedAt) / 1000);
     const clock = formatClock(secs);
-    els.sessionTimer.textContent = clock;
     els.settingsTimer.textContent = clock;
   }, 1000);
 }
@@ -320,11 +310,7 @@ function cleanupConnection() {
 }
 
 function updateQuality(rttMs) {
-  let level = 1;
-  if (rttMs < 100) level = 4;
-  else if (rttMs < 250) level = 3;
-  else if (rttMs < 500) level = 2;
-  els.quality.dataset.level = String(level);
+  // Signal-strength bars removed from the UI; quality data is no longer displayed.
 }
 
 // ---------------------------------------------------------------- chat
