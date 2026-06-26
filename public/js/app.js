@@ -379,6 +379,20 @@ els.messageInput.addEventListener("input", () => {
   els.messageInput.style.height = `${els.messageInput.scrollHeight}px`;
 });
 
+// Keep --composer-h in sync with the fixed composer's real rendered height,
+// so the chat area always reserves exactly enough space and content never
+// hides behind it (handles the textarea growing, safe-area insets, etc).
+if (typeof ResizeObserver !== "undefined") {
+  const syncComposerHeight = () => {
+    document.documentElement.style.setProperty(
+      "--composer-h",
+      `${els.composerForm.offsetHeight}px`
+    );
+  };
+  new ResizeObserver(syncComposerHeight).observe(els.composerForm);
+  syncComposerHeight();
+}
+
 els.composerForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = els.messageInput.value.trim();
@@ -612,7 +626,6 @@ els.messageInput.addEventListener("paste", (e) => {
     if (file) state.fileTransfer.enqueue([file]);
   }
 });
-
 // ---------------------------------------------------------------- home UI
 els.hostBtn.addEventListener("click", startHosting);
 
@@ -671,3 +684,4 @@ window.addEventListener("beforeunload", () => {
 
 // ---------------------------------------------------------------- init
 resetToHome();
+
