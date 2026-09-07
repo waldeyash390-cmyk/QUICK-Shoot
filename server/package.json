@@ -1,0 +1,17 @@
+{
+  "name": "quickshoot-server",
+  "version": "1.0.0",
+  "description": "Signaling server for Quickshoot. Only relays room codes and WebRTC handshake metadata - never message text or file bytes.",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.17.0"
+  }
+}

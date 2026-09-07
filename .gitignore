@@ -1,0 +1,21 @@
+# Environment files (contains secrets)
+.env
+.env.local
+.env.*.local
+
+# Docker
+.docker/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
