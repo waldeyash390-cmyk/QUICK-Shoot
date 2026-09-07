@@ -301,12 +301,12 @@ button{ cursor:pointer; }
 
 .host-lobby-header{ display:flex; flex-direction:column; align-items:center; gap:6px; }
 
-.host-lobby-badge{
+ .host-lobby-badge{
   display:inline-block;
   font-family:var(--font-mono); font-size:11px; font-weight:700;
   letter-spacing:2px; text-transform:uppercase;
   color:var(--accent);
-  background:var(--accent-dim);
+  background: rgba(94,230,197,0.1);
   border:1px solid var(--accent);
   border-radius:20px;
   padding:3px 12px;
@@ -327,13 +327,8 @@ button{ cursor:pointer; }
 }
 
 /* Room code card */
-.host-code-card{
-  width:100%;
-  background:var(--surface);
-  border:1px solid var(--border);
-  border-radius:12px;
-  padding:16px 20px;
-  display:flex; flex-direction:column; align-items:center; gap:10px;
+ .host-code-card{
+  margin-bottom:16px; /* extra spacing to QR */
 }
 
 .host-code-label{
@@ -376,8 +371,8 @@ button{ cursor:pointer; }
 .host-copy-btn:active{ transform:translateY(0); }
 
 /* QR block */
-.host-qr-wrap{
-  display:flex; flex-direction:column; align-items:center; gap:10px;
+ .host-qr-wrap{
+  margin-bottom:16px; /* extra spacing to waiting pulse */
 }
 
 .qr-img{
@@ -394,7 +389,9 @@ button{ cursor:pointer; }
 }
 
 /* Waiting pulse row */
-.host-waiting-pulse{
+ .host-waiting-pulse{
+  margin-top:16px; /* extra spacing */
+}
   display:flex; align-items:center; justify-content:center; gap:8px;
   font-size:13px; color:var(--muted);
 }
@@ -899,13 +896,13 @@ button{ cursor:pointer; }
 .join-card h2{ font-size:18px; font-weight:700; margin:0; }
 .join-card p{ margin:0; color:var(--muted); font-size:13px; line-height:1.5; }
 
-.join-input-row{
-  display:flex; align-items:stretch; gap:8px;
+ .join-input-row{
+  display:flex; align-items:center; gap:8px;
 }
-.join-input-row .code-input{
+ .join-input-row .code-input{
   flex:1;
-  font-size:22px; font-weight:700; letter-spacing:6px;
-  padding:12px 14px; border-radius:8px; text-transform:uppercase;
+  font-size:14px; font-weight:600; letter-spacing:2px;
+  padding:7px 10px; border-radius:6px; text-transform:uppercase;
 }
 .join-input-row .code-input:focus{
   border-color:var(--accent);
@@ -914,12 +911,12 @@ button{ cursor:pointer; }
 }
 
 /* Camera button */
-.qr-cam-btn{
+ .qr-cam-btn{
   display:flex; align-items:center; justify-content:center;
-  width:52px; flex-shrink:0;
+  width:36px; height:36px; flex-shrink:0;
   background:var(--surface-2);
   border:1px solid var(--border);
-  border-radius:8px;
+  border-radius:6px;
   color:var(--muted);
   cursor:pointer;
   transition:color .15s, border-color .15s, background .15s;
