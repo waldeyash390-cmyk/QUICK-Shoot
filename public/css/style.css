@@ -6,12 +6,19 @@
 *{ box-sizing: border-box; }
 html,body{ height:100%; }
 [hidden]{ display:none !important; }
-:root{
-  --bg:        linear-gradient(135deg, #1a1a1f, #26262c);
-  --surface:   rgba(45,45,52,0.55); /* glass background */
-  --surface-2: rgba(45,45,52,0.55);
-  --border:    rgba(255,255,255,0.08);
-  --text:      #F2F2F5;
+ :root{
+  /* Color Palette - More sophisticated and accessible */
+  --bg-primary: #0f172a;      /* Dark slate */
+  --bg-secondary: #1e293b;    /* Slate 800 */
+  --bg-tertiary: #334155;     /* Slate 700 */
+  --bg-surface: #1e293b;      /* For cards and surfaces */
+  --bg: #0a0a0d;              /* Very dark near‑black */
+  --surface: #1c1e24;         /* Card/panel background */
+  --surface-2: #262933;       /* Inputs/hover */
+  --border: #334155;          /* Subtle borders */
+  --text: #f5f6f8;            /* Near‑white */
+  --text-primary: #f8fafc;    /* Slate 50 */
+
   --muted:     #9B9BA3;
   --accent:    #5ee6c5;   /* connected / primary action */
   --accent-dim:#1f3a36;
