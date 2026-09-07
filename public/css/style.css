@@ -182,7 +182,7 @@ button{ cursor:pointer; }
   content: "";
   position: absolute;
   inset: 0;
-  background: rgba(0,0,0,0.55);
+  background: rgba(0,0,0,0.3);
   z-index: 1;
 }
 #screenHome > *:not(.bg-video) {
@@ -219,10 +219,14 @@ button{ cursor:pointer; }
 }
 @media (max-width:560px){ .choice-grid{ grid-template-columns:1fr; } }
 
-.choice-card{
-  background:var(--surface); border:1px solid var(--border); border-radius:12px;
+ .choice-card {
+  background: rgba(20,20,25,0.55);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  backdrop-filter: blur(8px);
   transition: transform .2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow .2s;
 }
+
 
  .choice-card:hover{ transform:translateY(-2px); box-shadow:0 8px 32px rgba(0,0,0,0.35); }
 /* Make choice cards equal height and align content */
@@ -230,9 +234,9 @@ button{ cursor:pointer; }
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: 16px;
-   min-height: 260px;
-   height: 100%;
+  padding: 14px;
+    min-height: 180px;
+    height: auto;
    box-sizing: border-box;
 }
 /* Consistent button styling */
@@ -260,8 +264,8 @@ button{ cursor:pointer; }
 
 
 
-.choice-card p{ margin:0; color:var(--muted); font-size:13px; }
-.choice-card h2{ margin:0; font-size:26px; font-weight:700; }
+.choice-card p{ margin:0; color:var(--muted); font-size:13px; text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
+.choice-card h2{ margin:0; font-size:26px; font-weight:700; text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
 
 .code-input{
   background:var(--surface-2); border:1px solid var(--border); border-radius:6px;
@@ -423,7 +427,7 @@ button{ cursor:pointer; }
   box-shadow:0 0 20px rgba(94,230,197,0.25);
 .btn.primary:active{ transform:scale(0.95); }
 
-.btn.secondary{ background:transparent; border-color:var(--accent); color:var(--accent); }
+ .btn.secondary{ background: var(--accent); border: none; color: var(--text-primary); }
 .btn.ghost{ background:transparent; }
 .btn.danger{ background:transparent; border-color:var(--danger); color:var(--danger); }
 .btn.danger:hover{ background:rgba(229,96,90,0.08); }
