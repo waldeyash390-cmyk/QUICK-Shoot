@@ -573,6 +573,12 @@ button{ cursor:pointer; }
 
 }
 .composer-input-wrap{ flex:1; position:relative; }
+/* Enforce explicit icon order in composer */
+#composerForm #attachBtn{ order:1; }
+#composerForm #cameraBtn{ order:2; }
+#composerForm #callBtn{ order:3; }
+#composerForm .composer-input-wrap{ order:4; flex:1; }
+#composerForm #sendBtn{ order:5; }
 .composer textarea{
   width:100%; resize:none; max-height:120px;
   background:transparent; border:none; padding:9px 12px; color:var(--text);
@@ -588,12 +594,84 @@ button{ cursor:pointer; }
   padding:16px;
 }
 .overlay[hidden]{ display:none; }
-.settings-panel{
-  background:var(--surface); border:1px solid var(--border); border-radius:16px;
-  padding:20px; width:100%; max-width:360px; display:flex; flex-direction:column; gap:12px;
+/* Settings panel – glassmorphism */
+#settingsOverlay .settings-panel{
+  background: rgba(10,10,13,0.6);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  padding: 20px;
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  opacity: 0;
+  transform: scale(0.95);
+  transition: opacity .2s ease, transform .2s ease;
 }
-.settings-row{ display:flex; justify-content:space-between; gap:12px; font-size:13px; }
-.settings-row span:last-child{ color:var(--muted); text-align:right; }
+#settingsOverlay:not([hidden]) .settings-panel{
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* Settings rows – separated */
+.settings-row{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  font-size:13px;
+  padding-bottom:8px;
+  border-bottom:1px solid var(--border);
+}
+.settings-row:last-of-type{
+  border-bottom:none;
+  padding-bottom:0;
+}
+.settings-row span:first-child{
+  color:var(--muted);
+}
+.settings-row span:last-child{
+  color:var(--text-primary);
+  text-align:right;
+}
+
+/* Ensure connection state is accent */
+#settingsConnState{
+  color: var(--accent);
+}
+
+/* Theme toggle button – visible pill */
+#themeToggleBtn{
+  background: var(--surface-2);
+  border:1px solid var(--border);
+  border-radius: var(--radius);
+  padding:4px 8px;
+  font-size:13px;
+}
+
+/* Cancel / close button styles inside settings overlay */
+#closeSettingsBtn{
+  border:1px solid var(--border);
+  color: var(--text);
+  background:transparent;
+}
+#closeSettingsBtn:hover{
+  background:rgba(255,255,255,0.05);
+}
+
+/* Leave button – danger outline */
+#leaveBtn{
+  border:1px solid var(--danger);
+  color: var(--danger);
+  background:transparent;
+}
+#leaveBtn:hover{
+  background:rgba(229,96,90,0.08);
+}
+
 .settings-panel hr{ border:none; border-top:1px solid var(--border); margin:4px 0; }
 .confirm-row{ display:flex; gap:10px; justify-content:flex-end; }
 
