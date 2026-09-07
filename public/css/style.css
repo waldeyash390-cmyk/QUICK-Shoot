@@ -388,46 +388,66 @@ button{ cursor:pointer; }
   letter-spacing:0.2px;
 }
 
-/* Waiting pulse row */
- .host-waiting-pulse{
-  margin-top:16px; /* extra spacing */
+/* Join step indicator */
+.join-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
 }
-  display:flex; align-items:center; justify-content:center; gap:8px;
-  font-size:13px; color:var(--muted);
+.join-step-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.join-step-dot.active {
+  background: var(--accent);
+  animation: dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.5); opacity: 0.5; }
+}
+.join-step-dot.done {
+  background: var(--accent);
+  position: relative;
+}
+.join-step-dot.done::after {
+  content: "✔";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  font-size: 10px;
 }
 
-.pulse-dot{
+/* Host waiting pulse: use accent and pulse animation */
+.pulse-dot {
   width:8px; height:8px; border-radius:50%;
-  background:var(--warn);
+  background: var(--accent);
   display:inline-block;
-  animation:blink 1.4s ease-in-out infinite;
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { transform:scale(1); opacity:0.8; }
+  50% { transform:scale(1.5); opacity:0.3; }
 }
 
-/* Setup spinner */
-.setup-state{
-  display:flex; flex-direction:column; align-items:center;
-  gap:16px; color:var(--muted); font-size:13px;
+/* Cancel buttons – destructive outline */
+#cancelWaitBtn,
+#cancelWaitBtnHost {
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  background: transparent;
 }
-.setup-spinner{
-  width:32px; height:32px;
-  border:2px solid var(--border);
-  border-top-color:var(--accent);
-  border-radius:50%;
-  animation:spin 0.8s linear infinite;
+#cancelWaitBtn:hover,
+#cancelWaitBtnHost:hover {
+  background: rgba(229,96,90,0.08);
 }
-@keyframes spin{ to{ transform:rotate(360deg); } }
 
-/* ---------------------------------------------------------------- buttons */
-  border-radius:16px;
-.btn:hover{ border-color:#34393f; }
-.btn.small{ padding:7px 12px; font-size:13px; }
-  box-shadow:0 0 20px rgba(94,230,197,0.25);
-.btn.primary:active{ transform:scale(0.95); }
-
- .btn.secondary{ background: var(--accent); border: none; color: var(--text-primary); }
-.btn.ghost{ background:transparent; }
-.btn.danger{ background:transparent; border-color:var(--danger); color:var(--danger); }
-.btn.danger:hover{ background:rgba(229,96,90,0.08); }
 
 /* ---------------------------------------------------------------- chat screen */
 .chat-screen{ flex:1; padding-bottom: var(--composer-h, 64px); }
