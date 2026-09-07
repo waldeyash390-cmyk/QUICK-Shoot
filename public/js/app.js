@@ -10,7 +10,7 @@ const $ = (id) => document.getElementById(id);
 
 const els = {
   roomTag: $("roomTag"),
-  settingsBtn: $("settingsBtn"),
+  toolsBtn: $("toolsBtn"),
 
   screenHome: $("screenHome"),
   hostBtn: $("hostBtn"),
@@ -170,7 +170,10 @@ function resetToHome() {
   setStatus("offline", "Offline");
   hide(els.roomTag);
   hide(els.peerCount);
-  hide(els.settingsBtn);
+    hide(els.settingsBtn);
+    hide(els.toolsBtn);
+    hide(els.callBtn);
+    hide(els.headerVideoCallBtn);
   els.messages.innerHTML = "";
   els.fileList.innerHTML = "";
   els.joinCodeInput.value = "";
@@ -351,6 +354,9 @@ function onFirstConnect() {
   show(els.roomTag);
   show(els.peerCount);
   show(els.settingsBtn);
+  show(els.toolsBtn);
+  show(els.callBtn);
+  show(els.headerVideoCallBtn);
   els.settingsRoomCode.textContent = state.roomCode;
   setStatus("online", "Connected");
   if (state.myName === "Host") {
