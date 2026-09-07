@@ -103,7 +103,26 @@ button{ cursor:pointer; }
   flex-shrink:0;
 }
 .bar-left, .bar-right{ display:flex; align-items:center; gap:12px; }
-.brand{   letter-spacing:-0.01em; }
+ .brand{
+  letter-spacing:-0.01em;
+  background: linear-gradient(
+    90deg,
+    var(--text-primary) 0%,
+    var(--text-primary) 40%,
+    var(--accent) 50%,
+    var(--text-primary) 60%,
+    var(--text-primary) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: logo-shine 4s linear infinite;
+}
+@keyframes logo-shine {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 .room-tag{
   font-family:var(--font-mono);
   font-size:13px;
