@@ -765,19 +765,31 @@ els.fileInput.addEventListener("change", () => {
   }
   els.fileInput.value = "";
 });
+let dragCounter = 0;
 
-["dragover", "dragenter"].forEach((evt) =>
-  els.fileDrop.addEventListener(evt, (e) => {
-    e.preventDefault();
-    els.fileDrop.classList.add("dragover");
-  })
-);
-["dragleave", "dragend"].forEach((evt) =>
-  els.fileDrop.addEventListener(evt, () => els.fileDrop.classList.remove("dragover"))
-);
-els.fileDrop.addEventListener("drop", (e) => {
+document.addEventListener('dragenter', (e) => {
   e.preventDefault();
-  els.fileDrop.classList.remove("dragover");
+  dragCounter++;
+  els.fileDrop.classList.add('dragover');
+});
+
+document.addEventListener('dragover', (e) => {
+  e.preventDefault();
+});
+
+document.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  dragCounter--;
+  if (dragCounter <= 0) {
+    els.fileDrop.classList.remove('dragover');
+    dragCounter = 0;
+  }
+});
+
+document.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragCounter = 0;
+  els.fileDrop.classList.remove('dragover');
   if (e.dataTransfer.files.length && state.fileTransfer) {
     state.fileTransfer.enqueue([...e.dataTransfer.files]);
   }

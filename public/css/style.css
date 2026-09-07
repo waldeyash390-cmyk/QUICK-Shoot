@@ -30,7 +30,31 @@ html,body{ height:100%; }
 
   --radius: 8px;
   --gap: 16px;
+
+  /* New design system variables */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 16px;
+  --fs-lg: 20px;
+  --fs-xl: 24px;
+  --fs-xxl: 28px;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 999px;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.12);
+  --shadow-md: 0 8px 32px rgba(0,0,0,0.35);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
 }
+
 
 /* Light theme — toggled via [data-theme="light"] on <html>, see settings */
 :root[data-theme="light"]{
@@ -116,12 +140,23 @@ button{ cursor:pointer; }
 .icon-btn{
   background: var(--surface);
   border:1px solid var(--border);
-  border-radius:999px;
-  width:44px;
-  height:44px;
+  border-radius: var(--radius-lg);
+  width:40px;
+  height:40px;
   color: var(--text);
 }
 .icon-btn:hover{ background:var(--surface-2); }
+
+/* Send button (icon) */
+.icon-btn.send-btn{
+  background: var(--accent);
+  color: var(--text-primary);
+}
+.icon-btn.send-btn:disabled{
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: not-allowed;
+}
 
 /* ---------------------------------------------------------------- screens */
 .screen{ flex:1; display:flex; flex-direction:column; overflow:hidden; }
@@ -351,10 +386,20 @@ button{ cursor:pointer; }
 
   .file-panel{   border-top:1px solid var(--border); background:var(--surface); flex-shrink:0; border-radius:16px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 8px 32px rgba(0,0,0,0.35); }
 .file-drop{
-  display:flex; align-items:center; gap:10px; justify-content:center;
-  padding:10px; border-bottom:1px dashed var(--border); color:var(--muted); font-size:13px;
+  display:none;
+  position:fixed;
+  inset:0;
+  background: var(--surface);
+  color: var(--text);
+  align-items:center;
+  justify-content:center;
+  gap: var(--space-2);
+  font-size: var(--fs-base);
+  z-index: 100;
 }
-.file-drop.dragover{ background:var(--accent-dim); color:var(--text); }
+.file-drop.dragover{
+  display:flex;
+}
 /* ── File list ─────────────────────────────────────────────────────────── */
 .file-list{ list-style:none; margin:0; padding:0; max-height:220px; overflow-y:auto; }
 .file-list:empty{ display:none; }
@@ -439,13 +484,13 @@ button{ cursor:pointer; }
 
 .composer{
   position:fixed;   left:50%; bottom:20px; z-index:40;
-  display:flex; align-items:flex-end; gap:10px;   padding:10px 12px; /* keep side padding */
+  display:flex; align-items:center; gap:10px;   padding:10px 12px; /* keep side padding */
   padding-bottom:calc(10px + env(safe-area-inset-bottom));
   width:calc(100% - 24px); /* ensure not full width to give side margin */
   max-width:720px; /* limit width */
   left:50%; transform:translateX(-50%);
   border:1px solid var(--border);
-  border-radius:999px;
+  border-radius: var(--radius-lg);
   background:var(--surface);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 8px 32px rgba(0,0,0,0.35);
 
