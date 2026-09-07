@@ -224,7 +224,41 @@ button{ cursor:pointer; }
   transition: transform .2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow .2s;
 }
 
-.choice-card:hover{ transform:translateY(-2px); box-shadow:0 8px 32px rgba(0,0,0,0.35); }
+ .choice-card:hover{ transform:translateY(-2px); box-shadow:0 8px 32px rgba(0,0,0,0.35); }
+/* Make choice cards equal height and align content */
+.choice-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 16px;
+   min-height: 260px;
+   height: 100%;
+   box-sizing: border-box;
+}
+/* Consistent button styling */
+.choice-card .btn {
+  background: var(--accent);
+  color: var(--text-primary);
+  border: none;
+  border-radius: var(--radius);
+  padding: 7px 12px;
+  font-weight: 600;
+}
+ .choice-card .btn:focus-visible {
+   outline: 2px solid var(--accent);
+}
+
+/* Ensure forms in cards take full height and push button to bottom */
+.choice-card form {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+}
+.choice-card form .btn {
+  margin-top: auto;
+}
+
+
 
 .choice-card p{ margin:0; color:var(--muted); font-size:13px; }
 .choice-card h2{ margin:0; font-size:26px; font-weight:700; }
