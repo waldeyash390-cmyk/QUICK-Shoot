@@ -23,16 +23,8 @@ async function fetchIceServers() {
       const res = await fetch("/turn-credentials");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      const turnServers = [];
-      if (data.urls) {
-        for (const url of data.urls) {
-          turnServers.push({
-            urls: url,
-            username: data.username,
-            credential: data.credential,
-          });
-        }
-      }
+      // Metered returns an array of {urls, username, credential} objects
+      const turnServers = Array.isArray(data) ? data : [];
       cachedIceServers = [...STUN_SERVERS, ...turnServers];
       console.log("[WebRTC] ICE servers configured with TURN relay");
     } catch (err) {
