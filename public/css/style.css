@@ -578,17 +578,27 @@ button{ cursor:pointer; }
 }
 .fi-dl-btn:hover{ background:#7df0d5; }
 
-.composer{
-  position:fixed;   left:50%; bottom:20px; z-index:40;
-  display:flex; align-items:center; gap:10px;   padding:10px 12px; /* keep side padding */
-  padding-bottom:calc(10px + env(safe-area-inset-bottom));
-  width:calc(100% - 24px); /* ensure not full width to give side margin */
-  max-width:720px; /* limit width */
-  left:50%; transform:translateX(-50%);
-  border:1px solid var(--border);
+ .composer{
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: env(safe-area-inset-bottom, 0);
+  margin: 0 auto;
+  width: calc(100% - 24px);
+  max-width:720px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom));
   border-radius: var(--radius-lg);
-  background:var(--surface);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 8px 32px rgba(0,0,0,0.35);
+  border: none;
+  background: var(--surface);
+  /* subtle top separator (optional) */
+  box-shadow: inset 0 1px 0 var(--border), 0 8px 32px rgba(0,0,0,0.35);
+  z-index: 40;
+}
+
 
 }
 .composer-input-wrap{ flex:1; position:relative; }
