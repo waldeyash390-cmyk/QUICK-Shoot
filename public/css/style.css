@@ -624,7 +624,7 @@ button{ cursor:pointer; }
 }
 .composer textarea::placeholder { color:#7A7A82; }
 .composer textarea:focus{ outline:none; border-color:var(--accent); }
-.typing-indicator{ position:absolute; bottom:-18px; left:2px; font-size:11px; color:var(--muted); }
+.typing-indicator{ position:absolute; bottom:calc(100% + 6px); left:2px; font-size:11px; color:var(--muted); z-index:45; }
 
 /* ---------------------------------------------------------------- overlays */
 .overlay{
