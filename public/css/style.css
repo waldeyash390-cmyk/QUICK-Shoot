@@ -474,7 +474,7 @@ button{ cursor:pointer; }
   flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:8px;
 }
 .msg{ max-width:72%; padding:8px 12px; border-radius:10px; background:var(--surface); align-self:flex-start; }
-.msg.me{ align-self:flex-end; background:var(--accent-dim); border:1px solid var(--accent); }
+.msg.me{ align-self:flex-end; background: linear-gradient(135deg, #16302e, #1d3f3a); color:#eafffa; border:1px solid rgba(94, 230, 197, 0.18); }
 .msg .body{ white-space:pre-wrap; word-break:break-word; }
 .msg .meta{ display:block; margin-top:4px; font-size:11px; color:var(--muted); font-family:var(--font-mono); }
 .msg .meta .read{ color:var(--accent); }
