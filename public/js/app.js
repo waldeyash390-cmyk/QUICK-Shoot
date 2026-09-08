@@ -97,7 +97,8 @@ const state = {
   cryptoKey: null,
   fileTransfer: null,
   connectedAt: null,
-  timerHandle: null,
+    sentStatusElements: new Map(),
+    unseenIncomingMsgIds: new Set(),
   myMsgCount: 0,
   // Track which peers are typing
   typingPeers: new Set(),
@@ -175,6 +176,8 @@ function resetToHome() {
     hide(els.callBtn);
     hide(els.headerVideoCallBtn);
   els.messages.innerHTML = "";
+  // Reset any pending read‑receipt tracking for messages that were cleared
+  state.unseenIncomingMsgIds.clear();
   els.fileList.innerHTML = "";
   els.joinCodeInput.value = "";
   hide(els.homeError);
@@ -427,9 +430,10 @@ function updateQuality(rttMs) {
 }
 
 // ---------------------------------------------------------------- chat
-function addMessage({ text, mine, ts, senderLabel }) {
+function addMessage({ text, mine, ts, senderLabel, msgId }) {
   const div = document.createElement("div");
   div.className = `msg ${mine ? "me" : ""}`;
+  div.dataset.msgId = msgId;
   const body = document.createElement("span");
   body.className = "body";
 
@@ -486,10 +490,26 @@ function addMessage({ text, mine, ts, senderLabel }) {
   meta.className = "meta";
   const time = new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   meta.textContent = mine ? time : `${senderLabel || "Peer"} · ${time}`;
-  div.append(body, meta);
-  els.messages.appendChild(div);
-  els.messages.scrollTop = els.messages.scrollHeight;
-  return div;
+    const status = document.createElement("span");
+    status.className = "msg-status";
+    status.textContent = "Sent";
+    // Store reference for later update if this is an outgoing message
+    if (mine && msgId) {
+      state.sentStatusElements.set(msgId, status);
+    }
+    // Only attach status for outgoing messages
+    if (mine) {
+      div.append(body, meta, status);
+    } else {
+      // Incoming message – track its ID for read receipt
+      if (msgId) {
+        state.unseenIncomingMsgIds.add(msgId);
+        // Observe visibility for read receipt
+        if (typeof visibilityObserver !== "undefined") visibilityObserver.observe(div);
+      }
+      div.append(body, meta);
+    }
+
 }
 
 function addSystemMessage(text) {
@@ -510,20 +530,63 @@ function updateTypingIndicator() {
   }
 }
 
+// ------------------------------------------------------------ read‑receipt helpers
+/**
+ * Send a "seen" payload containing message IDs that have been observed.
+ * Only sends when the document is visible.
+ * @param {string[]} ids
+ */
+function sendSeen(ids) {
+  if (!ids || ids.length === 0) return;
+  if (document.visibilityState !== "visible") return;
+  broadcastChatPayload({ t: "seen", ids });
+}
+
+/**
+ * IntersectionObserver that watches incoming message elements.
+ * When an incoming message becomes visible while the tab is active, we send a "seen"
+ * notification for that message ID and stop observing it.
+ */
+const visibilityObserver = new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    if (document.visibilityState !== "visible") continue;
+    const el = entry.target;
+    const id = el.dataset.msgId;
+    if (id && state.unseenIncomingMsgIds.has(id)) {
+      sendSeen([id]);
+      // No longer need to watch this element
+      visibilityObserver.unobserve(el);
+      state.unseenIncomingMsgIds.delete(id);
+    }
+  }
+});
+
 async function broadcastChatPayload(obj) {
   const encrypted = await CryptoModule.encryptJSON(state.cryptoKey, obj);
   state.mesh.broadcast("chat", encrypted.buffer.slice(0));
-}
+
 
 async function onChatData(rawArrayBuffer, fromPeerId) {
   const msg = await CryptoModule.decryptJSON(state.cryptoKey, rawArrayBuffer);
   const label = state.peerNames.get(fromPeerId) || fromPeerId.slice(0, 4).toUpperCase();
 
-  if (msg.t === "msg") {
-    addMessage({ text: msg.text, mine: false, ts: msg.ts, senderLabel: label });
-    state.typingPeers.delete(fromPeerId);
-    updateTypingIndicator();
-  } else if (msg.t === "typing") {
+    if (msg.t === "msg") {
+      addMessage({ text: msg.text, mine: false, ts: msg.ts, senderLabel: label, msgId: msg.msgId });
+      state.typingPeers.delete(fromPeerId);
+      updateTypingIndicator();
+    } else if (msg.t === "seen") {
+      // msg.ids is an array of message IDs that the remote peer has seen
+      if (Array.isArray(msg.ids)) {
+        msg.ids.forEach((id) => {
+          const statusElem = state.sentStatusElements.get(id);
+          if (statusElem) {
+            statusElem.textContent = "Seen";
+            statusElem.classList.add("seen");
+          }
+        });
+      }
+    } else if (msg.t === "typing") {
     if (msg.state) state.typingPeers.add(fromPeerId);
     else state.typingPeers.delete(fromPeerId);
     updateTypingIndicator();
@@ -568,11 +631,12 @@ if (typeof ResizeObserver !== "undefined") {
 els.composerForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = els.messageInput.value.trim();
-  if (!text || !state.mesh) return;
+    if (!text || !state.mesh) return;
 
-  const ts = Date.now();
-  await broadcastChatPayload({ t: "msg", text, ts });
-  addMessage({ text, mine: true, ts });
+    const ts = Date.now();
+    const msgId = `${state.myPeerId}-${ts}`;
+    await broadcastChatPayload({ t: "msg", text, ts, msgId });
+    addMessage({ text, mine: true, ts, msgId });
 
   els.messageInput.value = "";
   els.messageInput.style.height = "auto";
