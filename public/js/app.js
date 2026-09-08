@@ -510,6 +510,10 @@ function addMessage({ text, mine, ts, senderLabel, msgId }) {
       div.append(body, meta);
     }
 
+  // Append the message bubble to the chat container and scroll to bottom
+  els.messages.appendChild(div);
+  els.messages.scrollTop = els.messages.scrollHeight;
+  return div;
 }
 
 function addSystemMessage(text) {
