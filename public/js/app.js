@@ -565,6 +565,7 @@ const visibilityObserver = new IntersectionObserver((entries) => {
 async function broadcastChatPayload(obj) {
   const encrypted = await CryptoModule.encryptJSON(state.cryptoKey, obj);
   state.mesh.broadcast("chat", encrypted.buffer.slice(0));
+}
 
 
 async function onChatData(rawArrayBuffer, fromPeerId) {
