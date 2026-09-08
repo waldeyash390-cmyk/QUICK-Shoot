@@ -180,24 +180,29 @@ wss.on("connection", (socket) => {
       }
 
       case "join": {
-        const code = String(msg.code || "").toUpperCase().trim();
-        const room = rooms.get(code);
+      const code = String(msg.code || "").toUpperCase().trim();
+      const room = rooms.get(code);
 
-        if (!room) return send(socket, { type: "error", message: "Room code not found or expired." });
+      if (!room) return send(socket, { type: "error", message: "Room code not found or expired." });
 
-        // Snapshot existing peers + their display names BEFORE adding the new one
-        const existingPeers = room.peerList().map((pid) => ({
-          peerId: pid,
-          name: room.names.get(pid) || pid.slice(0, 4).toUpperCase(),
-        }));
+      // Enforce a maximum of 2 participants per room (host + one joiner)
+      if (room.peers.size >= 2) {
+        return send(socket, { type: "error", message: "This room is full. The chat is already in use." });
+      }
 
-        // Ascending name: U1, U2, U3... assigned in join order, never reused
-        room.joinCounter += 1;
-        const name = `U${room.joinCounter}`;
-        room.names.set(socket.peerId, name);
+      // Snapshot existing peers + their display names BEFORE adding the new one
+      const existingPeers = room.peerList().map((pid) => ({
+        peerId: pid,
+        name: room.names.get(pid) || pid.slice(0, 4).toUpperCase(),
+      }));
 
-        room.addPeer(socket.peerId, socket);
-        socket.roomCode = code;
+      // Ascending name: U1, U2, U3... assigned in join order, never reused
+      room.joinCounter += 1;
+      const name = `U${room.joinCounter}`;
+      room.names.set(socket.peerId, name);
+
+      room.addPeer(socket.peerId, socket);
+      socket.roomCode = code;
 
         // Tell the joiner: your peerId/name + all existing peers (with names) in the room
         send(socket, { type: "joined", code, peerId: socket.peerId, name, peers: existingPeers });

@@ -323,12 +323,17 @@ async function handleSignalingMessage(msg) {
     }
 
     case "error": {
+      // Show server‑sent error (e.g. room full) on the join screen
       toast(msg.message);
       els.homeError.textContent = msg.message;
       show(els.homeError);
-      cleanupConnection();
-      showScreen("home");
-      break;
+      // If we are on the join screen, keep us there; otherwise return home
+      if (els.joinForm && !els.joinForm.hidden) {
+        // stay on join screen – error already displayed
+      } else {
+        cleanupConnection();
+        resetToHome();
+      }
     }
 
     case "room-closed": {
