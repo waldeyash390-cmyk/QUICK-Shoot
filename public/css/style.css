@@ -469,7 +469,7 @@ button{ cursor:pointer; }
 
 
 /* ---------------------------------------------------------------- chat screen */
-.chat-screen{ flex:1; padding-bottom: var(--composer-h, 64px); }
+  .chat-screen{ flex:1; padding-bottom: calc(var(--composer-h, 64px) + 12px); }
 .messages{
   flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:8px;
 }
@@ -582,7 +582,7 @@ button{ cursor:pointer; }
   position: fixed;
   left: 0;
   right: 0;
-  bottom: env(safe-area-inset-bottom, 0);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
   margin: 0 auto;
   width: calc(100% - 24px);
   max-width:720px;
