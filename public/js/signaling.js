@@ -1,11 +1,17 @@
 // signaling.js — talks to the server only to exchange room codes and
 // WebRTC handshake metadata (SDP/ICE). Never carries chat or file content.
 
+// Address of the WebSocket signaling server (server/index.js).
+// Netlify can't host it, so deploy server/ elsewhere (Render, Railway, Fly.io…)
+// and put its address here, e.g. "wss://quickshoot-server.onrender.com/ws".
+// Leave empty to use the same host the page is served from.
+const SIGNALING_URL = "";
+
 export class Signaling extends EventTarget {
   constructor() {
     super();
     this.ws = null;
-    this.url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
+    this.url = SIGNALING_URL || `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
     this._reconnectAttempts = 0;
     this._manualClose = false;
     this._keepaliveTimer = null;
